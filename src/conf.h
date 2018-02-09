@@ -109,6 +109,7 @@ typedef enum trusted_domain_t_ {
 typedef enum mac_choice_t_ {
 	TRUSTED_MAC,
 	UNTRUSTED_MAC,
+	TRUSTED_LOCAL_MAC,
 	ROAM_MAC
 } mac_choice_t;
 //<<< liudf added end
@@ -292,6 +293,7 @@ typedef struct {
 	t_domain_trusted *domains_trusted; /** domains list, seperate with comma*/
 	t_domain_trusted *inner_domains_trusted; /** inner domains list, user cannot configure*/
 	t_trusted_mac	*roam_maclist; /** roam mac list*/
+	t_trusted_mac	*trusted_local_maclist; /** trusted local mac list*/
 	t_untrusted_mac	*mac_blacklist; /** blacklist mac*/
 	char 	*htmlredirfile;
 	char	*internet_offline_file;
@@ -304,6 +306,7 @@ typedef struct {
 	short	queue_size;
 	short	no_auth;
 	short	work_mode; /** when work_mode 1, it will drop all packets default*/
+	short	bypass_apple_cna; /* boolean, Bypass Apple Captive Network Assistant */
 	int 	update_domain_interval; /** 0, no need update; otherwise update every update_domain_interval*checkinterval seconds*/
 	char * dns_timeout; /*time to limit during of parsing the dns */
 } s_config;
@@ -415,7 +418,19 @@ void __clear_trusted_mac_list();
 
 void clear_trusted_mac_list();
 
-t_trusted_mac *add_trusted_mac(const char *);
+t_trusted_mac *get_trusted_mac_by_ip(const char *);
+
+// trusted local maclist operation for wdctl
+void parse_trusted_local_mac_list(const char *);
+
+void parse_del_trusted_local_mac_list(const char *);
+
+void __clear_trusted_local_mac_list();
+
+void clear_trusted_local_mac_list();
+
+t_trusted_mac *add_trusted_local_mac(const char *);
+
 
 // mac blacklist operation, for wdctl use
 void parse_untrusted_mac_list(const char*);

@@ -13,3 +13,13 @@ Thank you to all contributors:
 [jianhuizhao](https://github.com/809205580)
 
 [wangyin2016](https://github.com/wangyin2016)
+
+[LiuQiQuan](https://github.com/tea4go)
+
+[GuYingChun](https://github.com/RuiChen1113)
+
+[wenchangshou2](https://github.com/wenchangshou2)
+
+[Lzxiangxmut](https://github.com/Lzxiangxmut)
+
+[fenggui321](https://github.com/fenggui321)

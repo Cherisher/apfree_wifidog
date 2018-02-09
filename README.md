@@ -1,6 +1,30 @@
+![ApFreeWiFiDog](https://github.com/liudf0716/apfree_wifidog/blob/master/logo.png)
+
+
+[![license][1]][2]
+[![PRs Welcome][3]][4]
+[![Issue Welcome][5]][6]
+[![Release Version][7]][8]
+[![OpenWRT][11]][12]
+[![KunTeng][13]][14]
+
+
+[1]: https://img.shields.io/badge/license-GPLV3-brightgreen.svg?style=plastic
+[2]: https://github.com/liudf0716/apfree_wifidog/blob/master/COPYING
+[3]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=plastic
+[4]: https://github.com/liudf0716/apfree_wifidog/pulls
+[5]: https://img.shields.io/badge/Issues-welcome-brightgreen.svg?style=plastic
+[6]: https://github.com/liudf0716/apfree_wifidog/issues/new
+[7]: https://img.shields.io/badge/release-2.10.1437-red.svg?style=plastic
+[8]: https://github.com/liudf0716/apfree_wifidog/releases
+[11]: https://img.shields.io/badge/Platform-%20OpenWRT%7C%20LEDE%20-brightgreen.svg?style=plastic
+[12]: https://github.com/KunTengRom/LEDE
+[13]: https://img.shields.io/badge/KunTeng-Inside-blue.svg?style=plastic
+[14]: http://rom.kunteng.org
+
 ## Apfree WiFiDog: Efficient captive portal solution
 
-Apfree-WiFidog is an open source captive protal solution for wireless router which with embeddabled linux([LEDE](https://github.com/lede-project/source)/[Openwrt](https://github.com/openwrt/openwrt)). 
+Apfree-WiFidog is an open source captive portal solution for wireless router which with embeddable Linux([LEDE](https://github.com/lede-project/source)/[Openwrt](https://github.com/openwrt/openwrt)). 
 
 
 **[中文介绍](https://github.com/liudf0716/apfree_wifidog/blob/master/README_ZH.md)**
@@ -9,7 +33,7 @@ Apfree-WiFidog is an open source captive protal solution for wireless router whi
 
 It has some awesome features:
 
-* *Compatible with original wifodog protocol*. You can seamless migration Apfree WiFidog to connect your auth server if you runned traditional wifidog.
+* *Compatible with original wifidog protocol*. You can seamless migration Apfree WiFidog to connect your auth server if you runned traditional wifidog.
 
 * *HTTPS support*. Not only `HTTP`, Apfree WiFiDog can capture `HTTPS` URL request. It's a big deference between traditional WiFiDog.
 
@@ -22,47 +46,16 @@ It has some awesome features:
 
 ----
 
-## How To Compile
+## Added to Openwrt&LEDE 
 
-**[基于LEDE编译Apfree_wifidog](https://github.com/liudf0716/apfree_wifidog/wiki/%E5%9F%BA%E4%BA%8ELEDE%E7%BC%96%E8%AF%91Apfree_wifidog)**
-
-Fork and clone the Apfree WiFiDog project:
-
-    git clone https://github.com/liudf0716/apfree_wifidog
-    cd apfree_wifidog
-
-Assuming you have a working [LEDE](https://github.com/lede-project/source)/[Openwrt](https://github.com/openwrt/openwrt) setup, taking `LEDE` as an example and assuming your LEDE root path is `LEDE_ROOT`:
-
-	cp -r package/apfree_wifidog/ /LEDE_ROOT/package/
-
-To support `HTTPS`, you need install `libevent` with version 2.1.7 or latest in your LEDE environment, Or using the package copied in Apfree WiFiDog git project:
-
-    cp -r package/libevent2/ /LEDE_ROOT/package/libs/
-
-Now Apfree WiFiDog package has been installed in LEDE packages environment.
-
-    cd /LEDE_ROOT/
-	make menuconfig
-
-Chose your `Target System` and `Network -->Captive Portals --> apfree_wifidog`. `SAVE` and `EXIT`.
-
-Do compiling:
-
-```
-make package/apfree_wifidog/compile V=s
-```
-
-After Doing `make package/apfree_wifidog/compile V=s`, Apfree WiFiDog `ipk` package is packed in path `bin/packages/YOUR-TARGET-ARCH/base/apfree_wifidog_VERSION-RELEASE_YOUR-TARGET-ARCH.ipk `. Push it up into your LEDE-system router, use `opkg install ` command to install this `ipk`.
-
-
-**The CA-Certificate in this project is ONLY for Apfree WiFiDog HTTPS captive testing, CAN NOT be used for business scene**
+Please go to [package_apfree_wifidog](https://github.com/KunTengRom/package_apfree_wifidog)
 
 
 --------
 
 ## Getting started
 
-After compiling and installing Apfree WiFiDog into your local router, run the `ps | grep wifidog` command. The `ps | grep wifidog` command queries the linux system for information about Apfree WiFiDog.
+After compiling and installing Apfree WiFiDog into your local router, run the `ps | grep wifidog` command. The `ps | grep wifidog` command queries the Linux system for information about Apfree WiFiDog.
 
 ```
 root@lede:~# ps | grep wifidog
@@ -90,13 +83,15 @@ config wifidog
         option pool_mode '1'
         option thread_number '5'
         option queue_size '20'
-        option wired_passed '0'
+        option wired_passed '1'
         option trusted_domains 'www.baidu.com,www.qq.com,www.qq.com.cn,www.weixin.com'
 ```
 
+wired_passed means whether LAN access devices need to auth or not, value 1 means no need to auth 
+
 Domains of `www.baidu.com,www.qq.com,www.qq.com.cn,www.weixin.com` is trusted in this default configuration file, and you can modify it to what you want.
 
-### Apfree wifidog Auth server project
+### Apfree wifidog Auth server open source project
 
 **Please read [AUTHSERVER.md](https://github.com/liudf0716/apfree_wifidog/blob/master/AUTHSERVER.md)**
 
@@ -117,7 +112,6 @@ Feel free to create issues or pull-requests if you have any problems.
 **Please read [CONTRIBUTING.md](https://github.com/liudf0716/apfree_wifidog/blob/master/CONTRIBUTING.md) before pushing any changes.**
 
 
+### apfree wifidog qq group： [331230369](https://jq.qq.com/?_wv=1027&k=4ADDSev)
 
 ---
-
-

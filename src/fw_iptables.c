@@ -79,7 +79,8 @@ static char *iptables_compile(const char *, const char *, const t_firewall_rule 
 
 // Use libiptc instead command iptables by zhangzf, 20170413
 static int iptables_do_append_command(void *handle, const char *format, ...);
-static void iptables_load_ruleset(const char *, const char *, const char *, void *handle);
+static void iptables_load_ruleset(const char *, const char *, const char *, void *handle); 
+static int __iptables_fw_destroy_mention(const char *table, const char *chain, const char *mention, void *handle, int count);
 
 #define iptables_do_command(...) \
 	iptables_do_append_command(NULL, __VA_ARGS__)
@@ -237,8 +238,8 @@ static int
 iptables_do_append_command(void *handle, const char *format, ...)
 {
 	va_list vlist;
-	char *fmt_cmd;
-	char *cmd;
+	char *fmt_cmd = NULL;
+	char *cmd = NULL;
 	int rc;
 
 	va_start(vlist, format);
@@ -268,7 +269,10 @@ iptables_do_append_command(void *handle, const char *format, ...)
 			debug(LOG_DEBUG, "iptables command failed(%d): %s", rc, cmd);
 	}
 
+    free(fmt_cmd);
+    fmt_cmd = NULL;
 	free(cmd);
+    cmd = NULL;
 
 	return rc;
 }
@@ -550,6 +554,26 @@ iptables_fw_set_trusted_mac(const char *mac)
 }
 
 void
+iptables_fw_clear_trusted_local_maclist(void)
+{
+	iptables_flush_ipset(CHAIN_TRUSTED_LOCAL);
+}
+
+void
+iptables_fw_set_trusted_local_maclist(void)
+{
+	const s_config *config;
+	t_trusted_mac *p = NULL;
+
+	config = config_get_config();
+
+	LOCK_CONFIG();
+	for (p = config->trusted_local_maclist; p != NULL; p = p->next)
+		ipset_do_command("add " CHAIN_TRUSTED_LOCAL " %s", p->mac);
+	UNLOCK_CONFIG();
+}
+
+void
 iptables_fw_clear_untrusted_maclist(void)
 {
 	iptables_flush_ipset(CHAIN_UNTRUSTED);
@@ -678,7 +702,7 @@ iptables_fw_save_online_clients()
 	f_fw_allow_open();
 
 	while (current != NULL) {
-		iptables_do_command_save("-t mangle -A " CHAIN_OUTGOING " -s %s -m mac --mac-source %s -j MARK --set-mark %d", 
+		iptables_do_command_save("-t mangle -A " CHAIN_OUTGOING " -s %s -m mac --mac-source %s -j MARK --set-mark 0x%x0000/0xff0000", 
 					current->ip, current->mac, FW_MARK_KNOWN);
 		iptables_do_command_save("-t mangle -A " CHAIN_INCOMING " -d %s -j ACCEPT", current->ip);
 
@@ -732,6 +756,7 @@ iptables_fw_init(void)
 
 	// add ipset support
 	ipset_do_command("create " CHAIN_TRUSTED " hash:mac timeout 0 ");
+	ipset_do_command("create " CHAIN_TRUSTED_LOCAL " hash:mac timeout 0 ");
 	ipset_do_command("create " CHAIN_ROAM " hash:mac timeout 0 ");
 	ipset_do_command("create " CHAIN_UNTRUSTED " hash:mac timeout 0 ");
 	ipset_do_command("create " CHAIN_DOMAIN_TRUSTED " hash:ip ");
@@ -764,18 +789,19 @@ iptables_fw_init(void)
 
 	if( config->no_auth != 0 ) {
 		debug(LOG_DEBUG, "No auth set");
-		iptables_do_append_command(handle, "-t mangle -A " CHAIN_TO_PASS " -j MARK --set-mark %d", FW_MARK_KNOWN);
+		iptables_do_append_command(handle, "-t mangle -A " CHAIN_TO_PASS " -j MARK --set-mark 0x%x0000/0xff0000", FW_MARK_KNOWN);
 	}
 
 	iptables_do_append_command(handle, "-t mangle -I PREROUTING 1 -i %s -j " CHAIN_ROAM, config->gw_interface);
-	iptables_do_append_command(handle, "-t mangle -A " CHAIN_ROAM " -m set --match-set " CHAIN_ROAM " src -j MARK --set-mark %d", FW_MARK_KNOWN);
+	iptables_do_append_command(handle, "-t mangle -A " CHAIN_ROAM " -m set --match-set " CHAIN_ROAM " src -j MARK --set-mark 0x%x0000/0xff0000", FW_MARK_KNOWN);
 
 	if (got_authdown_ruleset)
 		iptables_do_append_command(handle, "-t mangle -I PREROUTING 1 -i %s -j " CHAIN_AUTH_IS_DOWN, config->gw_interface);
 
 	iptables_do_append_command(handle, "-t mangle -I POSTROUTING 1 -o %s -j " CHAIN_INCOMING, config->gw_interface);
 	//>>> liudf added&modified 20160113
-	iptables_do_append_command(handle, "-t mangle -A " CHAIN_TRUSTED " -m set --match-set " CHAIN_TRUSTED " src -j MARK --set-mark %d", FW_MARK_KNOWN);
+	iptables_do_append_command(handle, "-t mangle -A " CHAIN_TRUSTED " -m set --match-set " CHAIN_TRUSTED " src -j MARK --set-mark 0x%x0000/0xff0000", FW_MARK_KNOWN);
+	iptables_do_append_command(handle, "-t mangle -A " CHAIN_TRUSTED " -m set --match-set " CHAIN_TRUSTED_LOCAL " src -j MARK --set-mark 0x%x0000/0xff0000", FW_MARK_KNOWN);
 	//<<< liudf added end
 
 	fw3_ipt_commit(handle);
@@ -825,15 +851,15 @@ iptables_fw_init(void)
 		debug(LOG_DEBUG, "Proxy port set, setting proxy rule");
 
 		iptables_do_append_command(handle, "-t nat -A " CHAIN_TO_PASS
-							" -p tcp --dport 80 -m mark --mark 0x%u -j REDIRECT --to-port %u", FW_MARK_KNOWN,
+							" -p tcp --dport 80 -m mark --mark 0x%x0000/0xff0000 -j REDIRECT --to-port %u", FW_MARK_KNOWN,
 							proxy_port);
 		iptables_do_append_command(handle, "-t nat -A " CHAIN_TO_PASS
-							" -p tcp --dport 80 -m mark --mark 0x%u -j REDIRECT --to-port %u", FW_MARK_PROBATION,
+							" -p tcp --dport 80 -m mark --mark 0x%x0000/0xff0000 -j REDIRECT --to-port %u", FW_MARK_PROBATION,
 							proxy_port);
 	}
 
-	iptables_do_append_command(handle, "-t nat -A " CHAIN_TO_INTERNET " -m mark --mark 0x%u -j ACCEPT", FW_MARK_KNOWN);
-	iptables_do_append_command(handle, "-t nat -A " CHAIN_TO_INTERNET " -m mark --mark 0x%u -j ACCEPT", FW_MARK_PROBATION);
+	iptables_do_append_command(handle, "-t nat -A " CHAIN_TO_INTERNET " -m mark --mark 0x%x0000/0xff0000 -j ACCEPT", FW_MARK_KNOWN);
+	iptables_do_append_command(handle, "-t nat -A " CHAIN_TO_INTERNET " -m mark --mark 0x%x0000/0xff0000 -j ACCEPT", FW_MARK_PROBATION);
 	iptables_do_append_command(handle, "-t nat -A " CHAIN_TO_INTERNET " -j " CHAIN_UNKNOWN);
 
 	iptables_do_append_command(handle, "-t nat -A " CHAIN_UNKNOWN " -j " CHAIN_AUTHSERVERS);
@@ -849,7 +875,7 @@ iptables_fw_init(void)
 
 	if (got_authdown_ruleset) {
 		iptables_do_append_command(handle, "-t nat -A " CHAIN_UNKNOWN " -j " CHAIN_AUTH_IS_DOWN);
-		iptables_do_append_command(handle, "-t nat -A " CHAIN_AUTH_IS_DOWN " -m mark --mark 0x%u -j ACCEPT", FW_MARK_AUTH_IS_DOWN);
+		iptables_do_append_command(handle, "-t nat -A " CHAIN_AUTH_IS_DOWN " -m mark --mark 0x%x0000/0xff0000 -j ACCEPT", FW_MARK_AUTH_IS_DOWN);
 	}
 
 	if (config_get_config()->work_mode == 0) {
@@ -894,7 +920,7 @@ iptables_fw_init(void)
 						" -o %s -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu", ext_interface);
 
 	// liudf added 20151224
-	iptables_do_append_command(handle, "-t filter -A " CHAIN_TO_INTERNET " -m mark --mark 0x%u -j " CHAIN_LOCKED, FW_MARK_LOCKED);
+	iptables_do_append_command(handle, "-t filter -A " CHAIN_TO_INTERNET " -m mark --mark 0x%x0000/0xff0000 -j " CHAIN_LOCKED, FW_MARK_LOCKED);
 	iptables_load_ruleset("filter", FWRULESET_LOCKED_USERS, CHAIN_LOCKED, handle);
 
 	iptables_do_append_command(handle, "-t filter -A " CHAIN_TO_INTERNET " -j " CHAIN_AUTHSERVERS);
@@ -909,14 +935,14 @@ iptables_fw_init(void)
 	iptables_do_append_command(handle, "-t filter -A " CHAIN_TO_INTERNET " -j " CHAIN_GLOBAL);
 	iptables_load_ruleset("filter", FWRULESET_GLOBAL, CHAIN_GLOBAL, handle);
 
-	iptables_do_append_command(handle, "-t filter -A " CHAIN_TO_INTERNET " -m mark --mark 0x%u -j " CHAIN_VALIDATE, FW_MARK_PROBATION);
+	iptables_do_append_command(handle, "-t filter -A " CHAIN_TO_INTERNET " -m mark --mark 0x%x0000/0xff0000 -j " CHAIN_VALIDATE, FW_MARK_PROBATION);
 	iptables_load_ruleset("filter", FWRULESET_VALIDATING_USERS, CHAIN_VALIDATE, handle);
 
-	iptables_do_append_command(handle, "-t filter -A " CHAIN_TO_INTERNET " -m mark --mark 0x%u -j " CHAIN_KNOWN, FW_MARK_KNOWN);
+	iptables_do_append_command(handle, "-t filter -A " CHAIN_TO_INTERNET " -m mark --mark 0x%x0000/0xff0000 -j " CHAIN_KNOWN, FW_MARK_KNOWN);
 	iptables_load_ruleset("filter", FWRULESET_KNOWN_USERS, CHAIN_KNOWN, handle);
 
 	if (got_authdown_ruleset) {
-		iptables_do_append_command(handle, "-t filter -A " CHAIN_TO_INTERNET " -m mark --mark 0x%u -j " CHAIN_AUTH_IS_DOWN,
+		iptables_do_append_command(handle, "-t filter -A " CHAIN_TO_INTERNET " -m mark --mark 0x%x0000/0xff0000 -j " CHAIN_AUTH_IS_DOWN,
 							FW_MARK_AUTH_IS_DOWN);
 		iptables_load_ruleset("filter", FWRULESET_AUTH_IS_DOWN, CHAIN_AUTH_IS_DOWN, handle);
 	}
@@ -1052,6 +1078,7 @@ iptables_fw_destroy(void)
 	debug(LOG_DEBUG, "Destroying our ipset entries");
 	
 	ipset_do_command("destroy " CHAIN_TRUSTED);
+	ipset_do_command("destroy " CHAIN_TRUSTED_LOCAL);
 	ipset_do_command("destroy " CHAIN_ROAM);
 	ipset_do_command("destroy " CHAIN_UNTRUSTED);
 	ipset_do_command("destroy " CHAIN_DOMAIN_TRUSTED);
@@ -1069,9 +1096,10 @@ iptables_fw_destroy(void)
  * @param table The table to search
  * @param chain The chain in that table to search
  * @param mention A word to find and delete in rules in the given table+chain
+ * @param count how many times to delete the chain
  */
-int
-iptables_fw_destroy_mention(const char *table, const char *chain, const char *mention, void *handle)
+static int
+__iptables_fw_destroy_mention(const char *table, const char *chain, const char *mention, void *handle, int count)
 {
 	FILE *p = NULL;
 	char *command = NULL;
@@ -1079,6 +1107,7 @@ iptables_fw_destroy_mention(const char *table, const char *chain, const char *me
 	char line[MAX_BUF] = {0};
 	char rulenum[10] = {0};
 	char *victim = safe_strdup(mention);
+	int i = 0;
 	int deleted = 0;
 
 	iptables_insert_gateway_id(&victim);
@@ -1087,44 +1116,48 @@ iptables_fw_destroy_mention(const char *table, const char *chain, const char *me
 
 	safe_asprintf(&command, "iptables -t %s -L %s -n --line-numbers -v", table, chain);
 	iptables_insert_gateway_id(&command);
-
-	if ((p = popen(command, "r"))) {
-		/* Skip first 2 lines */
-		while (!feof(p) && fgetc(p) != '\n') ;
-		while (!feof(p) && fgetc(p) != '\n') ;
-		/* Loop over entries */
-		while (fgets(line, sizeof(line), p)) {
-			/* Look for victim */
-			if (strstr(line, victim)) {
-				/* Found victim - Get the rule number into rulenum */
-				if (sscanf(line, "%9[0-9]", rulenum) == 1) {
-					/* Delete the rule: */
-					debug(LOG_DEBUG, "Deleting rule %s from %s.%s because it mentions %s", rulenum, table, chain,
-						  victim);
-					safe_asprintf(&command2, "-t %s -D %s %s", table, chain, rulenum);
-					if (handle)
-						iptables_do_append_command(handle, command2);
-					else
-						iptables_do_command(command2);
-					free(command2);
-					deleted = 1;
-					/* Do not keep looping - the captured rulenums will no longer be accurate */
-					break;
+	
+	do {
+		deleted = 0;
+		if ((p = popen(command, "r"))) {
+			/* Skip first 2 lines */
+			while (!feof(p) && fgetc(p) != '\n') ;
+			while (!feof(p) && fgetc(p) != '\n') ;
+			/* Loop over entries */
+			while (fgets(line, sizeof(line), p)) {
+				/* Look for victim */
+				if (strstr(line, victim)) {
+					/* Found victim - Get the rule number into rulenum */
+					if (sscanf(line, "%9[0-9]", rulenum) == 1) {
+						/* Delete the rule: */
+						debug(LOG_DEBUG, "Deleting rule %s from %s.%s because it mentions %s", rulenum, table, chain,
+							  victim);
+						safe_asprintf(&command2, "-t %s -D %s %s", table, chain, rulenum);
+						if (handle)
+							iptables_do_append_command(handle, command2);
+						else
+							iptables_do_command(command2);
+						free(command2);
+						deleted = 1;
+						/* Do not keep looping - the captured rulenums will no longer be accurate */
+						break;
+					}
 				}
 			}
+			pclose(p);
 		}
-		pclose(p);
-	}
+	} while(deleted && ++i < count);
 
 	free(command);
 	free(victim);
 
-	if (deleted) {
-		/* Recurse just in case there are more in the same table+chain */
-		iptables_fw_destroy_mention(table, chain, mention, handle);
-	}
-
 	return (deleted);
+}
+
+int
+iptables_fw_destroy_mention(const char *table, const char *chain, const char *mention, void *handle)
+{
+	return __iptables_fw_destroy_mention(table, chain, mention, handle, 20);
 }
 
 /** Set if a specific client has access through the firewall */
@@ -1137,13 +1170,13 @@ iptables_fw_access(fw_access_t type, const char *ip, const char *mac, int tag)
 
 	switch (type) {
 	case FW_ACCESS_ALLOW:
-		iptables_do_command("-t mangle -A " CHAIN_OUTGOING " -s %s -m mac --mac-source %s -j MARK --set-mark %d", ip,
+		iptables_do_command("-t mangle -A " CHAIN_OUTGOING " -s %s -m mac --mac-source %s -j MARK --set-mark 0x%x0000/0xff0000", ip,
 							mac, tag);
 		rc = iptables_do_command("-t mangle -A " CHAIN_INCOMING " -d %s -j ACCEPT", ip);
 		break;
 	case FW_ACCESS_DENY:
 		/* XXX Add looping to really clear? */
-		iptables_do_command("-t mangle -D " CHAIN_OUTGOING " -s %s -m mac --mac-source %s -j MARK --set-mark %d", ip,
+		iptables_do_command("-t mangle -D " CHAIN_OUTGOING " -s %s -m mac --mac-source %s -j MARK --set-mark 0x%x0000/0xff0000", ip,
 							mac, tag);
 		rc = iptables_do_command("-t mangle -D " CHAIN_INCOMING " -d %s -j ACCEPT", ip);
 		break;
@@ -1185,7 +1218,7 @@ iptables_fw_auth_unreachable(int tag)
 {
 	int got_authdown_ruleset = NULL == get_ruleset(FWRULESET_AUTH_IS_DOWN) ? 0 : 1;
 	if (got_authdown_ruleset)
-		return iptables_do_command("-t mangle -A " CHAIN_AUTH_IS_DOWN " -j MARK --set-mark 0x%u", tag);
+		return iptables_do_command("-t mangle -A " CHAIN_AUTH_IS_DOWN " -j MARK --set-mark 0x%x0000/0xff0000", tag);
 	else
 		return 1;
 }
@@ -1277,7 +1310,7 @@ iptables_fw_counters_update(void)
 					__get_client_name(p1);
 
 				if(p1->wired == -1) {
-					p1->wired = is_device_wired(p1->mac);
+					p1->wired = br_is_device_wired(p1->mac);
 				}
 				UNLOCK_CLIENT_LIST();
 			} else {
@@ -1286,9 +1319,9 @@ iptables_fw_counters_update(void)
 					  "iptables_fw_counters_update(): Could not find %s in client list, this should not happen unless if the gateway crashed",
 					  ip);
 				debug(LOG_ERR, "Preventively deleting firewall rules for %s in table %s", ip, CHAIN_OUTGOING);
-				iptables_fw_destroy_mention("mangle", CHAIN_OUTGOING, ip, NULL);
+				__iptables_fw_destroy_mention("mangle", CHAIN_OUTGOING, ip, NULL, 5);
 				debug(LOG_ERR, "Preventively deleting firewall rules for %s in table %s", ip, CHAIN_INCOMING);
-				iptables_fw_destroy_mention("mangle", CHAIN_INCOMING, ip, NULL);
+				__iptables_fw_destroy_mention("mangle", CHAIN_INCOMING, ip, NULL, 5);
 			}
 
 		}
@@ -1323,7 +1356,7 @@ iptables_fw_counters_update(void)
 					p1->counters.incoming_delta = p1->counters.incoming_history + counter - p1->counters.incoming;
 					p1->counters.incoming = p1->counters.incoming_history + counter;
 					debug(LOG_DEBUG, "%s - Incoming traffic %llu bytes, Updated counter.incoming to %llu bytes", ip, counter, p1->counters.incoming);
-					p1->counters.last_updated = time(NULL);
+				/*	p1->counters.last_updated = time(NULL); */
 				}
 
 				UNLOCK_CLIENT_LIST();
@@ -1333,9 +1366,9 @@ iptables_fw_counters_update(void)
 					  "iptables_fw_counters_update(): Could not find %s in client list, this should not happen unless if the gateway crashed",
 					  ip);
 				debug(LOG_ERR, "Preventively deleting firewall rules for %s in table %s", ip, CHAIN_OUTGOING);
-				iptables_fw_destroy_mention("mangle", CHAIN_OUTGOING, ip, NULL);
+				__iptables_fw_destroy_mention("mangle", CHAIN_OUTGOING, ip, NULL, 5);
 				debug(LOG_ERR, "Preventively deleting firewall rules for %s in table %s", ip, CHAIN_INCOMING);
-				iptables_fw_destroy_mention("mangle", CHAIN_INCOMING, ip, NULL);
+				__iptables_fw_destroy_mention("mangle", CHAIN_INCOMING, ip, NULL, 5);
 			}
 		}
 	}

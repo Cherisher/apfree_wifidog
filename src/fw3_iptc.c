@@ -623,7 +623,7 @@ fw3_ipt_rule_mask(struct fw3_ipt_rule *r)
 		p += SZ(ipt_entry_match) + m->match->size;
 	}
 
-	memset(p, 0xFF, SZ(ipt_entry_target) + (r->target) ? r->target->userspacesize : 0);
+	memset(p, 0xFF, SZ(ipt_entry_target) + ((r->target) ? r->target->userspacesize : 0));
 
 	return mask;
 }
@@ -643,7 +643,7 @@ fw3_ipt_flush_chain(struct fw3_ipt_handle *h, const char *chain)
 {
 	int rv = iptc_flush_entries(chain, h->handle);
 	if (!rv)
-		debug(LOG_ERR, "iptc_create_chain(): %s\n", iptc_strerror(errno));
+		debug(LOG_ERR, "iptc_flush_chain(): %s\n", iptc_strerror(errno));
 	
 	return rv;
 }
@@ -949,12 +949,17 @@ fw3_ipt_close(struct fw3_ipt_handle *h)
 		{
 			h->libc--;
 			dlclose(h->libv[h->libc]);
+            h->libv[h->libc] = NULL;
 		}
 
 		free(h->libv);
+        h->libv = NULL;
 	}
+    iptc_free(h->handle);
+    h->handle = NULL;
 
 	free(h);
+    h = NULL;
 }
 
 int

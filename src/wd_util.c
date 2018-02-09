@@ -390,7 +390,7 @@ get_status_text()
         pstr_cat(pstr, "\nTrusted MAC addresses:\n");
 
         for (p = config->trustedmaclist; p != NULL; p = p->next) {
-            pstr_append_sprintf(pstr, "  %s\n", p->mac);
+            pstr_append_sprintf(pstr, "  %s status: %d\n", p->mac, p->is_online);
         }
     }
 
@@ -598,23 +598,30 @@ mqtt_get_trusted_iplist_text()
 	if (config->domains_trusted == NULL)
 		return NULL;
 
-	struct json_object *jarray = json_object_new_array();
 	domain_trusted = config->domains_trusted;
-	pstr_t *pstr = pstr_new();
 	int first = 1;
 	
 	LOCK_DOMAIN();
-	struct json_object *jobj = json_object_new_object();
-	for(ip_trusted = domain_trusted->ips_trusted; ip_trusted != NULL; ip_trusted = ip_trusted->next) {
-		if (first) {
-			pstr_append_sprintf(pstr, "%s", ip_trusted->ip);
-			first = 0;
-		} else {
-			pstr_append_sprintf(pstr, ",%s", ip_trusted->ip);
-		}
+	for (; (domain_trusted != NULL)&& (strcmp(domain_trusted->domain,"iplist") != 0); domain_trusted = domain_trusted->next) ;
+
+	if(domain_trusted == NULL) {
+		UNLOCK_DOMAIN();
+		return NULL;
 	}
 
+	pstr_t *pstr = pstr_new();
+	for(ip_trusted = domain_trusted->ips_trusted; ip_trusted != NULL; ip_trusted = ip_trusted->next) {
+		if (first) {
+			  pstr_append_sprintf(pstr, "%s", ip_trusted->ip);
+			  first = 0;
+		 } else {
+			  pstr_append_sprintf(pstr, ",%s", ip_trusted->ip);
+		 }
+	 }
+
 	char *iplist = pstr_to_string(pstr);
+	struct json_object *jobj = json_object_new_object();
+	struct json_object *jarray = json_object_new_array();
 	json_object_object_add(jobj, domain_trusted->domain, 
 		json_object_new_string(first?"NULL":iplist));
 	json_object_array_add(jarray, jobj);
@@ -677,6 +684,9 @@ get_serialize_maclist(int which)
 	case UNTRUSTED_MAC:
 		maclist = config->mac_blacklist;
 		break;
+	case TRUSTED_LOCAL_MAC:
+		maclist = config->trusted_local_maclist;
+		break;
 	case ROAM_MAC:
 		maclist = config->roam_maclist;
 		break;
@@ -725,6 +735,11 @@ get_maclist_text(int which)
 		maclist = config->mac_blacklist;
 		pstr_cat(pstr, "\nUntrusted mac list:\n");
 		break;
+	case TRUSTED_LOCAL_MAC:
+		pstr = pstr_new();
+		maclist = config->trusted_local_maclist;
+		pstr_cat(pstr, "\nTrusted local mac list:\n");
+		break;
 	case ROAM_MAC:
 		pstr = pstr_new();
 		maclist = config->roam_maclist;
@@ -760,6 +775,12 @@ char *
 get_trusted_maclist_text()
 {
 	return get_maclist_text(TRUSTED_MAC);
+}
+
+char *
+get_trusted_local_maclist_text()
+{
+	return get_maclist_text(TRUSTED_LOCAL_MAC);
 }
 
 char *
@@ -1003,54 +1024,6 @@ br_is_device_wired(const char *mac){
 		char *bridge = config_get_config()->gw_interface;
 		debug(LOG_DEBUG,"mac %s check in bridge %s is wired", mac, bridge);
 		return is_device_wired_intern(mac, bridge);
-	}
-
-	return 0;
-}
-
-/*
- * 1: wired; 0: wireless
- * deprecated
- */
-int
-is_device_wired(const char *mac)
-{
-	FILE *fd = NULL;
-	char szcmd[128] = {0}; 
-	
-	snprintf(szcmd, 128, "/usr/bin/ktpriv get_mac_source %s", mac);
-	if((fd = popen(szcmd, "r"))) {
-		char buf[8] = {0};
-		fgets(buf, 7, fd);
-		pclose(fd);
-		if(buf[0] == '0')
-			return 1;
-	}
-
-	return 0;
-}
-
-
-/*
- * val can be ip or domain
- * 1: is online; 0: is unreachable
- */
-int
-is_device_online(const char *val)
-{
-	char cmd[256] = {0};
-	FILE *fd = NULL;
-
-	if(val == NULL || strlen(val) < 4)
-		return 0;
-	
-	snprintf(cmd, 256, "/usr/sbin/wdping %s", val);
-	if((fd = popen(cmd, "r")) != NULL) {
-		char result[4] = {0};
-		fgets(result, 3, fd);
-		pclose(fd);
-		if(result[0] == '1')
-			return 1;
 	}
 
 	return 0;

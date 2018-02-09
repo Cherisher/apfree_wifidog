@@ -100,7 +100,7 @@ static struct wifidog_mqtt_show_type {
 	char 	*(*process_mqtt_show_type)(void);
 } mqtt_show_type[] = {
 	{"domain", show_trusted_domains},
-	{"pdomains", show_trusted_pdomains},
+	{"pdomain", show_trusted_pdomains},
 	{"ip", show_trusted_iplist},
 	{"mac", show_trusted_maclist},
 	{NULL, NULL}
@@ -112,7 +112,7 @@ send_mqtt_response(struct mosquitto *mosq, const unsigned int req_id, int res_id
 	char *topic = NULL;
 	char *res_data = NULL;
 	safe_asprintf(&topic, "wifidog/%s/response/%d", config->gw_id, req_id);
-	safe_asprintf(&res_data, "{response:\"%d\",msg:\"%s\"}", res_id, msg==NULL?"null":msg);
+	safe_asprintf(&res_data, "{\"response\":\"%d\",\"msg\":\"%s\"}", res_id, msg==NULL?"null":msg);
 	debug(LOG_DEBUG, "send mqtt response: topic is %s msg is %s", topic, res_data);
 	mosquitto_publish(mosq, NULL, topic, strlen(res_data), res_data, 0, false);
 	free(topic);
@@ -289,13 +289,17 @@ set_auth_server_op(void *mosq, const char *type, const char *value, const int re
 	if((tmp_host_name != NULL) && (strcmp(hostname,tmp_host_name) != 0)) {
 		free(hostname);
 		config->auth_servers->authserv_hostname = safe_strdup(tmp_host_name);
+        uci_set_value("wifidog", "wifidog", "auth_server_hostname", config->auth_servers->authserv_hostname);
 	}
 	if((tmp_path != NULL) && (strcmp(path,tmp_host_name) != 0)) {
 		free(path);
 		config->auth_servers->authserv_path = safe_strdup(tmp_path);
+        uci_set_value("wifidog", "wifidog", "auth_server_path", config->auth_servers->authserv_path);
 	}
-	if(NULL != tmp_http_port)
+	if(NULL != tmp_http_port) {
 		config->auth_servers->authserv_http_port = atoi(tmp_http_port);
+        uci_set_value("wifidog", "wifidog", "auth_server_port", tmp_http_port);
+    }
 	UNLOCK_CONFIG();
 	
 	json_object_put(json_request);

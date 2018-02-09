@@ -65,6 +65,8 @@
 #include <event2/buffer.h>
 #include <event2/util.h>
 #include <event2/keyvalq_struct.h>
+#include <event2/ping.h>
+
 
 #ifdef EVENT__HAVE_NETINET_IN_H
 #include <netinet/in.h>
@@ -94,6 +96,7 @@
 
 static struct event_base *base		= NULL;
 static struct evdns_base *dnsbase 	= NULL;
+static struct evping_base *pingbase	= NULL;
 
 static void check_internet_available_cb(int errcode, struct evutil_addrinfo *addr, void *ptr);
 
@@ -172,6 +175,14 @@ evhttp_gw_reply_js_redirect(struct evhttp_request *req, const char *peer_addr) {
 	
 	evhttp_add_header(evhttp_request_get_output_headers(req),
 		    "Content-Type", "text/html");
+	evhttp_add_header(evhttp_request_get_output_headers(req),
+		    "Cache-Control", "no-store, must-revalidate");
+	evhttp_add_header(evhttp_request_get_output_headers(req),
+		    "Expires", "0");
+	evhttp_add_header(evhttp_request_get_output_headers(req),
+		    "Pragma", "no-cache");
+	evhttp_add_header(evhttp_request_get_output_headers(req),
+		    "Connection", "close");
 	evhttp_send_reply (req, 200, "OK", evb); 
 	
 	free(mac);
@@ -200,8 +211,6 @@ process_https_cb (struct evhttp_request *req, void *arg) {
     } else {
 		evhttp_gw_reply_js_redirect(req, peer_addr);
 	}
-	/*free the evhttp_request (con)*/
-	evhttp_connection_free(con);
 }
 
 /**
@@ -327,6 +336,50 @@ static void check_auth_server_available() {
               &hints, check_auth_server_available_cb, auth_server);
 }
 
+static void check_device_online_cb(int result, int bytes, char * fqname, char * dotname,
+              int seq, int ttl, struct timeval * elapsed, void * arg) {
+	t_trusted_mac *tmac = get_trusted_mac_by_ip(dotname);
+	if (!tmac)
+		return;	
+	
+	switch(result) {
+		case PING_ERR_NONE:
+			tmac->is_online = 1;
+			break;
+		case PING_ERR_TIMEOUT:
+		default:
+			tmac->is_online = 0;
+			break;	
+	}
+	
+	evping_base_host_delete_by_ipname(pingbase, tmac->ip);
+}
+
+//check whether white mac device online or not
+static void check_device_online() {
+	t_trusted_mac *p = NULL, *tmac_list = NULL;
+	s_config *config = config_get_config();
+	tmac_list = config->trustedmaclist;
+	if (!tmac_list)
+		return;
+	
+	int flag = 0;
+	LOCK_CONFIG();
+	for(p = tmac_list; p != NULL; p = p->next) {
+		if(p->ip == NULL) 
+			p->ip = arp_get_ip(p->mac);
+		
+		if (p->ip) {
+			evping_base_host_add(pingbase, p->ip);
+			flag = 1;
+		}
+	}
+ 	UNLOCK_CONFIG();
+	
+	if (flag)
+		evping_ping (pingbase, check_device_online_cb, tmac_list);
+}
+
 static void schedule_work_cb(evutil_socket_t fd, short event, void *arg) {
 	struct event *timeout = (struct event *)arg;
 	struct timeval tv;
@@ -336,6 +389,8 @@ static void schedule_work_cb(evutil_socket_t fd, short event, void *arg) {
 	check_internet_available(popular_server);
 
 	check_auth_server_available();
+	
+	check_device_online();
 	
 	// if config->update_domain_interval not 0
 	if (update_domain_interval == config_get_config()->update_domain_interval) {
@@ -354,23 +409,33 @@ static void schedule_work_cb(evutil_socket_t fd, short event, void *arg) {
 	event_add(timeout, &tv);
 }
 
-static int https_redirect (char *gw_ip,  t_https_server *https_server) { 	
+static int init_https_redirect (char *gw_ip,  t_https_server *https_server) { 	
   	struct evhttp *http;
   	struct evhttp_bound_socket *handle;
 	struct event timeout;
 	struct timeval tv;
+	int nret = 0;
 	
   	base = event_base_new ();
-  	if (! base) { 
+  	if (!base) { 
 		debug (LOG_ERR, "Couldn't create an event_base: exiting\n");
-      	return 1;
+      	nret = 1;
+		goto err;
     }
+	
+	pingbase = evping_base_new(base);
+	if (!pingbase) {
+		debug(LOG_ERR, "Couldn't create evping_base: exiting\n");
+		nret = 1;
+		goto err;
+	}
 	
   	/* Create a new evhttp object to handle requests. */
   	http = evhttp_new (base);
   	if (! http) { 
 		debug (LOG_ERR, "couldn't create evhttp. Exiting.\n");
-      	return 1;
+		nret = 1;
+		goto err;
     }
  
  	SSL_CTX *ctx = SSL_CTX_new (SSLv23_server_method ());
@@ -401,15 +466,19 @@ static int https_redirect (char *gw_ip,  t_https_server *https_server) {
 	if (! handle) { 
 		debug (LOG_ERR, "couldn't bind to port %d. Exiting.\n",
                (int) https_server->gw_https_port);
-		return 1;
+		nret = 1;
+		goto err;
     }
     
 	// check whether internet available or not
 	dnsbase = evdns_base_new(base, 0);
-	if ( 0 != evdns_base_resolv_conf_parse(dnsbase, DNS_OPTION_NAMESERVERS, "/tmp/resolv.conf.auto") ) {
+	if (dnsbase && 0 != evdns_base_resolv_conf_parse(dnsbase, DNS_OPTION_NAMESERVERS, "/tmp/resolv.conf.auto") ) {
 		debug (LOG_ERR, "evdns_base_resolv_conf_parse failed \n");
 		evdns_base_free(dnsbase, 0);
 		dnsbase = evdns_base_new(base, 1);
+	} else if (!dnsbase) {
+		nret = 1;
+		goto err;
 	}
 	evdns_base_set_option(dnsbase, "timeout", config_get_config()->dns_timeout);
 	evdns_base_set_option(dnsbase, "randomize-case:", "0");//TurnOff DNS-0x20 encoding
@@ -418,7 +487,7 @@ static int https_redirect (char *gw_ip,  t_https_server *https_server) {
 	check_internet_available(popular_server);
 	check_auth_server_available();
 
-	event_assign(&timeout, base, -1, EV_PERSIST, schedule_work_cb, (void*) &timeout);
+	event_assign(&timeout, base, -1, 0, schedule_work_cb, (void*) &timeout);
 	evutil_timerclear(&tv);
 	tv.tv_sec = config_get_config()->checkinterval;
     event_add(&timeout, &tv);
@@ -427,15 +496,19 @@ static int https_redirect (char *gw_ip,  t_https_server *https_server) {
     event_base_dispatch (base);
 
 	event_del(&timeout);
-	event_base_free(base);
-	evdns_base_free(dnsbase, 0);
-	close(handle);
+
+err:
+	if (handle) close(handle);
+	if (dnsbase) evdns_base_free(dnsbase, 0);
+	if (pingbase) evping_base_free(pingbase, 0);
+	if (base) event_base_free(base);
+	
 	
   	/* not reached; runs forever */
-  	return 0;
+  	return nret;
 }
 
 void thread_https_server(void *args) {
 	s_config *config = config_get_config();
-   	https_redirect (config->gw_address, config->https_server);
+   	init_https_redirect (config->gw_address, config->https_server);
 }

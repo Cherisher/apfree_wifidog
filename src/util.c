@@ -38,6 +38,7 @@
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <sys/poll.h>
 #include <netinet/in.h>
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
@@ -265,17 +266,26 @@ wd_connect(int sockfd, const struct sockaddr *their_addr, socklen_t addrlen, int
 	} else if (res == 0) {
 		goto success;
 	} else {
-		fd_set fdset; 
-		struct timeval tv; 
 		int so_error = 0;
-		int len = sizeof(so_error);
+        int len = sizeof(so_error);
 
-		tv.tv_sec = timeout; 
-		tv.tv_usec = 0; 
-		FD_ZERO(&fdset); 
-		FD_SET(sockfd, &fdset);
+#ifdef  SELECT
+        struct timeval tv;
+        fd_set fdset;
+        tv.tv_sec = timeout;
+        tv.tv_usec = 0;
 
-		res = select(sockfd+1, NULL, &fdset, NULL, &tv);
+        FD_ZERO(&fdset);
+        FD_SET(sockfd, &fdset);
+
+        res = select(sockfd+1, NULL, &fdset, NULL, &tv);
+#else
+        struct pollfd fds;
+        memset(&fds, 0, sizeof(fds));
+        fds.fd      = sockfd;
+        fds.events   = POLLOUT;
+        res = poll(&fds, 1, timeout*1000);
+#endif
 		switch(res) {
 		case 1: // data to read				
 			getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &so_error, &len);
@@ -301,17 +311,17 @@ success:
 #define	BUF_MAX		1024
 
 static int 
-read_cpu_fields (FILE *fp, unsigned long long int *fields)
+read_cpu_fields (FILE *fp, unsigned long *fields)
 {
 	int retval;
 	char buffer[BUF_MAX] = {0};
-
+	unsigned long total_tick = 0;
 
 	if (!fgets (buffer, BUF_MAX, fp)) { 
-	 return 0;
+	 	return 0;
 	}
 
-	retval = sscanf (buffer, "cpu %Lu %Lu %Lu %Lu %Lu %Lu %Lu %Lu %Lu %Lu", 
+	retval = sscanf (buffer, "%*s %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu", 
 							&fields[0], 
 							&fields[1], 
 							&fields[2], 
@@ -325,15 +335,18 @@ read_cpu_fields (FILE *fp, unsigned long long int *fields)
 	if (retval < 4) { /* Atleast 4 fields is to be read */
 		return 0;
 	}
-
-	return 1;
+	
+	int i = 0;
+	for(i = 0; i < 10; i++)
+		total_tick += fields[i];
+	return total_tick?1:0; // in case of total_tick  is zero, as some platform reporting, I dont know why.
 }
 
 float
 get_cpu_usage()
 {
 	FILE *fp;
-	unsigned long long int fields[10], total_tick, total_tick_old, idle, idle_old, del_total_tick, del_idle;
+	unsigned long fields[10], total_tick, total_tick_old, idle, idle_old, del_total_tick, del_idle;
 	int i;
 	float percent_usage;
 

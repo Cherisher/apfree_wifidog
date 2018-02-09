@@ -24,6 +24,7 @@
 #include <ctype.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <poll.h>
 #include <time.h>
 #include <errno.h>
 
@@ -50,12 +51,17 @@ int len;
     /* XXX Select based IO */
 
     int nfds;
+#ifdef SELECT
     fd_set readfds;
     struct timeval timeout;
+#else
+	struct pollfd fds;
+#endif
 	int i = 0;
    	int nread = 0, nret = 0;
  
 	do {
+#ifdef	SELECT
     	FD_ZERO(&readfds);
     	FD_SET(sock, &readfds);
     	timeout.tv_sec = 0; 
@@ -65,6 +71,13 @@ int len;
     	nfds = select(nfds, &readfds, NULL, NULL, &timeout);
 
     	if (nfds > 0 && FD_ISSET(sock, &readfds)) {
+#else
+		memset(&fds, 0, sizeof(fds));
+        fds.fd      = sock;
+        fds.events   = POLLIN;
+        nfds = poll(&fds, 1, 100);
+		if (nfds > 0 && fds.revents == POLLIN) {
+#endif
 			nret = read(sock, buf+nread, len-nread);
 			if (nret > 0 && nret <= (len-nread)) {
 				nread += nret;
@@ -95,12 +108,17 @@ int len;
 #else
     // liudf modified 20160302
 	int nfds;
+#ifdef	SELECT
     fd_set writefds;
-    struct timeval timeout;
+	struct timeval timeout;
+#else
+	struct pollfd fds;
+#endif
 	int i = 0;
 	int nwrite = 0, nret = 0;   	
  
 	do {
+#ifdef	SELECT
     	FD_ZERO(&writefds);
     	FD_SET(sock, &writefds);
     	timeout.tv_sec = 0; 
@@ -110,6 +128,13 @@ int len;
     	nfds = select(nfds, NULL, &writefds, NULL, &timeout);
 
     	if (nfds > 0 && FD_ISSET(sock, &writefds)) {
+#else
+		memset(&fds, 0, sizeof(fds));
+        fds.fd      = sock;
+        fds.events   = POLLOUT;
+        nfds = poll(&fds, 1, 100);
+		if (nfds > 0 && fds.revents == POLLOUT) {
+#endif
 			nret = write(sock, buf+nwrite, len-nwrite);
 			if	(nret > 0) {
 				nwrite += nret;
@@ -456,7 +481,13 @@ _httpd_sendHeaders(request * r, int contentLength, int modTime)
 	totalLength += nret;
 	nret = snprintf(hdrBuf+totalLength, HTTP_READ_BUF_LEN-totalLength, "Connection: close\r\nContent-Type: %s", 
 				r->response.contentType); // contentType already include "\r\n"
-
+	
+	totalLength += nret;
+	nret = snprintf(hdrBuf+totalLength, HTTP_READ_BUF_LEN-totalLength,
+				   	"Cache-Control: no-store, must-revalidate\r\n"
+					"Expires: 0\r\n"
+				   	"Pragma: no-cache\r\n");
+	
 #ifdef	_DEFLATE_SUPPORT_	
 	if (r->request.deflate) {
 		totalLength += nret;
